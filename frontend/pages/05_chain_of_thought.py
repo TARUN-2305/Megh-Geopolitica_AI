@@ -213,10 +213,10 @@ if st.session_state.current_explanation:
     
     node_x = []
     node_y = []
-    for node in G.nodes():
-        x, y = pos[node]
-        node_x.append(x)
-        node_y.append(y)
+    # Highlight active nodes
+    active_nodes = list(evidence.keys()) + ['Shortage_Probability']
+    node_colors = ['#e74c3c' if node in active_nodes else '#3498db' for node in G.nodes()]
+    node_sizes = [30 if node in active_nodes else 20 for node in G.nodes()]
 
     node_trace = go.Scatter(
         x=node_x, y=node_y,
@@ -224,7 +224,7 @@ if st.session_state.current_explanation:
         hoverinfo='text',
         text=list(G.nodes()),
         textposition="top center",
-        marker=dict(size=20, color='#3498db', line_width=2))
+        marker=dict(size=node_sizes, color=node_colors, line_width=2))
         
     fig = go.Figure(data=[edge_trace, node_trace],
                  layout=go.Layout(

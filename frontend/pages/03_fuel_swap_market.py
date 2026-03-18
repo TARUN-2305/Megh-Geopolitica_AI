@@ -74,16 +74,40 @@ st.divider()
 # --- Simulation Controls (for Demo) ---
 st.sidebar.subheader("🛠️ Demo Controls")
 if st.sidebar.button("🎲 Simulate Live Stock Changes"):
-    conn = sqlite3.connect('backend/data/hotels.db')
+    conn = sqlite3.connect(DB_PATH) # Using global DB_PATH
     c = conn.cursor()
-    # Randomly fluctuate stock in 5-10 hotels
-    hotel_ids = [random.randint(1, 75) for _ in range(10)]
-    for h_id in hotel_ids:
-        change = random.choice([-2, -1, 1, 2])
-        c.execute("UPDATE hotels SET lpg_stock = MAX(0, MIN(lpg_capacity, lpg_stock + ?)), last_updated = CURRENT_TIMESTAMP WHERE id = ?", (change, h_id))
+    
+    # Get all hotels
+    c.execute("SELECT id, lpg_stock, lpg_capacity FROM hotels")
+    hotels = c.fetchall()
+    
+    # Decide how many hotels to update (10-15)
+    num_to_update = random.randint(10, 15)
+    hotel_ids = random.sample([h[0] for h in hotels], num_to_update)
+    
+    for hid in hotel_ids:
+        # Fetch current stock
+        c.execute("SELECT lpg_stock, lpg_capacity FROM hotels WHERE id = ?", (hid,))
+        stock, cap = c.fetchone()
+        
+        # Decide type of change: create shortage or surplus?
+        # Bias toward maintaining variety
+        if stock < DEMAND_THRESHOLD:
+            # Low stock – maybe give a small surplus to simulate delivery
+            change = random.randint(1, 3)
+        elif stock > cap - 3:
+            # Near full – maybe consume some
+            change = -random.randint(1, 3)
+        else:
+            # Normal range – random walk
+            change = random.choice([-2, -1, 1, 2])
+        
+        new_stock = max(0, min(cap, stock + change))
+        c.execute("UPDATE hotels SET lpg_stock = ?, last_updated = CURRENT_TIMESTAMP WHERE id = ?", (new_stock, hid))
+    
     conn.commit()
     conn.close()
-    st.sidebar.success("Updated stock for 10 random hotels!")
+    st.sidebar.success(f"Updated {num_to_update} hotels with balanced changes!")
     st.rerun()
 
 st.sidebar.divider()
