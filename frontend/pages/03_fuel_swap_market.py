@@ -19,16 +19,16 @@ col_select, col_stats = st.columns([1, 3])
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 DB_PATH = os.path.join(BASE_DIR, "backend", "data", "hotels.db")
+PRED_DB_PATH = os.path.join(BASE_DIR, "backend", "data", "predictions.db")
 
-def query_db(query, params=()):
-    if not os.path.exists(DB_PATH): return None
+def query_db(path, query, params=()):
+    if not os.path.exists(path): return None
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = sqlite3.connect(path)
         df = pd.read_sql_query(query, conn, params=params)
         conn.close()
         return df
     except Exception as e:
-        # If table doesn't exist, return empty df instead of crashing
         return pd.DataFrame()
 
 # Standards for consistency
@@ -40,18 +40,22 @@ with col_select:
     ward = st.selectbox("Select Cluster Ward:", ["Jayanagar", "Indiranagar", "Malleswaram", "Whitefield"])
     
     # Real stats based on ward
-    ward_hotels = query_db("SELECT * FROM hotels WHERE ward = ?", (ward,))
+    ward_hotels = query_db(DB_PATH, "SELECT * FROM hotels WHERE ward = ?", (ward,))
     num_hotels = len(ward_hotels) if not ward_hotels.empty else 0
     total_surplus = ward_hotels[ward_hotels['lpg_stock'] > SURPLUS_THRESHOLD]['lpg_stock'].sum() if num_hotels > 0 else 0
     total_demand = (TARGET_STOCK - ward_hotels[ward_hotels['lpg_stock'] < DEMAND_THRESHOLD]['lpg_stock']).sum() if num_hotels > 0 else 0
 
-    st.metric("Active Hotels in Cluster", num_hotels)
-    st.metric("Total Surplus (Cylinders)", f"{int(total_surplus)}")
-    st.metric("Immediate Demand", f"{int(total_demand)}")
+    # Prediction from predictions.db
+    pred_df = query_db(PRED_DB_PATH, "SELECT probability FROM ward_predictions WHERE ward = ? ORDER BY date DESC LIMIT 1", (ward,))
+    risk_prob = pred_df['probability'].iloc[0] if not pred_df.empty else 0.45
+
+    st.metric("Active Hotels", num_hotels)
+    st.metric("Total Surplus", f"{int(total_surplus)}")
+    st.metric("Shortage Risk", f"{int(risk_prob*100)}%", delta=f"{int(total_demand)} units needed", delta_color="inverse")
 
 with col_stats:
     # 1. Surplus/Demand Bar Chart (Aggregated from DB)
-    ward_agg = query_db(f"""
+    ward_agg = query_db(DB_PATH, f"""
         SELECT ward, 
                SUM(CASE WHEN lpg_stock > {SURPLUS_THRESHOLD} THEN lpg_stock - {SURPLUS_THRESHOLD} ELSE 0 END) as surplus,
                SUM(CASE WHEN lpg_stock < {DEMAND_THRESHOLD} THEN {TARGET_STOCK} - lpg_stock ELSE 0 END) as demand
@@ -134,14 +138,15 @@ st.write(f"Visualizing optimal swap paths in {ward}. Nodes represent hotels; lin
 def create_matching_graph():
     G = nx.DiGraph()
     
-    # Get recent swaps
-    swaps_data = query_db("""
+    # Get recent swaps filtered by ward
+    swaps_data = query_db(DB_PATH, """
         SELECT h1.name as from_n, h2.name as to_n, s.cylinders
         FROM swaps s
         JOIN hotels h1 ON s.from_hotel_id = h1.id
         JOIN hotels h2 ON s.to_hotel_id = h2.id
+        WHERE h1.ward = ? OR h2.ward = ?
         ORDER BY s.timestamp DESC LIMIT 15
-    """)
+    """, (ward, ward))
     
     if swaps_data is None or swaps_data.empty:
         # Fallback to a few static nodes if no swaps yet
@@ -270,7 +275,7 @@ st.divider()
 
 # 4. Swap Ticker
 st.subheader("🔄 Recent Successful Swaps")
-swaps_df = query_db("""
+swaps_df = query_db(DB_PATH, """
     SELECT s.timestamp, h1.name as 'From', h2.name as 'To', s.cylinders as 'Quantity',
            '₹' || (s.cylinders * 100) as 'Savings'
     FROM swaps s
